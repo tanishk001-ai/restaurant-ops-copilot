@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ops-copilot",
+      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeArgs": [
+        "api.main:app",
+        "--host", "127.0.0.1",
+        "--port", "8000",
+        "--log-level", "warning"
+      ],
+      "port": 8000,
+      "env": {
+        "DATABASE_URL": "postgresql://copilot:copilot@localhost:5432/restaurant_ops"
+      }
+    }
+  ]
+}
