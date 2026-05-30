@@ -160,6 +160,38 @@ class MCPClient:
             "never from the planner or procurement engine."
         )
 
+    def approve_and_place_order(self) -> dict:
+        """
+        Called ONLY by agent/approval.py after explicit human confirmation.
+
+        This is the approved path to order placement.  It bypasses the
+        RuntimeError guard in instamart_place_order() because human approval
+        has already been collected by the approval gate.
+        """
+        import datetime
+
+        if self.mode != "synthetic":
+            raise NotImplementedError("Real mode: Builders Club access required")
+
+        if not self._cart:
+            return {"success": False, "message": "Cart is empty — nothing to order"}
+
+        items_snapshot = list(self._cart.values())
+        total          = self._cart_total()
+        order_id       = f"SIM-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        self._cart.clear()
+
+        return {
+            "success":  True,
+            "order_id": order_id,
+            "items":    items_snapshot,
+            "total":    total,
+            "payment":  "COD",
+            "status":   "SIMULATED — no real order placed",
+            "eta_mins": 45,
+        }
+
 
 def get_client(
     mode: str | None = None,
