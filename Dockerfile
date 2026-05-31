@@ -7,8 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps (Prophet excluded — Stan compilation is slow in CI;
-# XGBoost is the primary forecasting model in this stack)
+# Install Python deps first (cached layer — only invalidated if pyproject.toml changes)
+# Prophet excluded: Stan compilation is slow and XGBoost is the primary model here
 COPY pyproject.toml .
 RUN pip install --no-cache-dir \
     "fastapi>=0.115" "uvicorn[standard]>=0.32" \
@@ -20,9 +20,11 @@ RUN pip install --no-cache-dir \
     "mcp>=1.0" "pgvector>=0.3" \
     "python-multipart>=0.0.9" "jinja2>=3.1"
 
+# Copy source after deps so code changes don't bust the pip cache
 COPY . .
+
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "api.main:app", \
-     "--host", "0.0.0.0", "--port", "8000", "--reload"]
+ENTRYPOINT ["/app/entrypoint.sh"]

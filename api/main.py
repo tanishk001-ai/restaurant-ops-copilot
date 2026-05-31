@@ -107,19 +107,30 @@ async def dashboard() -> FileResponse:
 
 
 @app.get("/health")
-async def health() -> dict:
-    """Liveness + DB connectivity check."""
+async def health() -> JSONResponse:
+    """
+    Liveness + readiness check.
+
+    Returns 200 {"status":"ok", "orders":<n>, "forecasts":<n>} when the DB
+    is reachable and the orders table has been seeded.
+    Returns 503 {"status":"error", "detail":"…"} otherwise.
+
+    Consumed by Railway healthcheck and deploy_smoke_test.sh.
+    """
     try:
         c = _conn()
         cur = c.cursor()
         cur.execute("SELECT COUNT(*) FROM orders")
-        orders = cur.fetchone()[0]
+        orders: int = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM forecasts")
-        forecasts = cur.fetchone()[0]
+        forecasts: int = cur.fetchone()[0]
         c.close()
-        return {"status": "ok", "orders": orders, "forecasts": forecasts}
+        return JSONResponse({"status": "ok", "orders": orders, "forecasts": forecasts})
     except Exception as exc:
-        return {"status": "error", "detail": str(exc)}
+        return JSONResponse(
+            {"status": "error", "detail": str(exc)},
+            status_code=503,
+        )
 
 
 @app.get("/forecast")

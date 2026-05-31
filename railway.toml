@@ -1,0 +1,11 @@
+[build]
+builder           = "DOCKERFILE"
+dockerfilePath    = "./Dockerfile"
+
+[deploy]
+# Railway injects $PORT; entrypoint.sh uses ${PORT:-8000}
+startCommand       = "/app/entrypoint.sh"
+healthcheckPath    = "/health"
+healthcheckTimeout = 300          # seeder takes ~20-30s on a cold DB
+restartPolicyType  = "ON_FAILURE"
+restartPolicyMaxRetries = 5
