@@ -1,11 +1,12 @@
 services:
+
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: copilot
+      POSTGRES_USER:     copilot
       POSTGRES_PASSWORD: copilot
-      POSTGRES_DB: restaurant_ops
+      POSTGRES_DB:       restaurant_ops
     ports:
       - "5432:5432"
     volumes:
@@ -20,15 +21,16 @@ services:
   app:
     build: .
     restart: unless-stopped
-    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://copilot:copilot@db:5432/restaurant_ops
+    env_file:
+      - path: .env
+        required: false   # optional — add ANTHROPIC_API_KEY here to enable NL-ops
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - .:/app
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   pg_data:
