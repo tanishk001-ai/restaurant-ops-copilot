@@ -31,3 +31,13 @@ pg_data/
 # Prophet / XGBoost artefacts
 *.pkl
 *.json.gz
+
+# Claude Code
+.claude/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Node (if any tooling is added)
+node_modules/
