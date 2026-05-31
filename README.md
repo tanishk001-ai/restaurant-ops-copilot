@@ -418,4 +418,4 @@ restaurant-ops-copilot/
 
 ## License
 
-[MIT](LICENSE) © 2025 Tanishk Tiwari
+[MIT](LICENSE) © 2026 Tanishk Tiwari
