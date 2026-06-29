@@ -12,6 +12,14 @@
 
 ---
 
+## Demo
+
+▶️ [Watch the 2-minute walkthrough](https://www.loom.com/share/1a5113c349ab4917b404869d218440fd)
+
+The demo shows the full procurement loop: tomorrow's demand forecast → draft Instamart cart with line-item explanations → human approval → simulated order placed.
+
+---
+
 ## Problem statement
 
 Restaurant kitchens waste 15–25 % of food costs every week because procurement
@@ -413,6 +421,7 @@ restaurant-ops-copilot/
 | 🔍 | **pgvector semantic search** — `menu_embeds` table is provisioned; use cosine similarity for fuzzy ingredient matching in NL-ops. |
 | 📱 | **WhatsApp approval** — weekly cron → pipeline → WhatsApp summary → single-tap confirm via Twilio. |
 | 🌐 | **Multi-supplier** — extend `raw_material_catalog` for Blinkit / Zepto alongside Swiggy Instamart. |
+| 📅 | **7-day demand calendar** — weekly forecast view with weekend demand highlighting and Indian festival badges so owners can plan procurement 7 days ahead, not just tomorrow. |
 
 ---
 
