@@ -56,7 +56,7 @@ no spreadsheets, no phone calls to suppliers.
           │                                            │
           │  ┌────────────┐     ┌──────────────────┐  │
           │  │  Planner   │────▶│    Verifier      │  │
-          │  │ (Claude)   │◀────│  (pure Python)   │  │
+          │  │ (Gemini)   │◀────│  (pure Python)   │  │
           │  │  1 LLM call│     │  6 hard rules    │  │
           │  └─────┬──────┘     └──────────────────┘  │
           │        │  4-step JSON plan                 │
@@ -158,9 +158,9 @@ For exact per-dish MAE and MAPE: `python -m forecasting.evaluate`
          │
          ▼
  ┌───────────────────────────────────────────────────────┐
- │  Planner  (Claude claude-3-5-haiku, 1 API call)       │
+ │  Planner  (Gemini, Google GenAI SDK, 1 API call)      │
  │  • Input:  goal + context + optional verifier feedback │
- │  • Output: JSON plan via forced tool_use              │
+ │  • Output: JSON plan via forced function calling      │
  │  • Mandatory step order:                              │
  │      load_forecast → explode_bom →                   │
  │      compute_shortfall → draft_cart                   │
@@ -255,7 +255,7 @@ All blocked at the pure-Python layer — no LLM involvement required.
 git clone https://github.com/tanishk001-ai/restaurant-ops-copilot.git
 cd restaurant-ops-copilot
 
-# Optional: add ANTHROPIC_API_KEY to enable /ask (NL-ops)
+# Optional: add GEMINI_API_KEY to enable /ask (NL-ops)
 cp .env.example .env
 
 docker-compose up --build
@@ -283,7 +283,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # 3. Environment
-cp .env.example .env   # set ANTHROPIC_API_KEY if desired
+cp .env.example .env   # set GEMINI_API_KEY if desired
 
 # 4. Seed
 python -m data_gen.seed
@@ -322,7 +322,7 @@ healthcheck with 300 s timeout (for the first-run seeder), and restart policy.
 | `GET` | `/inventory` | Current stock + `is_low` flag for all 21 raw materials |
 | `POST` | `/draft-order` | Full pipeline → explained draft cart |
 | `POST` | `/approve-order` | `{"approval": true}` places the COD order; `false` returns pending state |
-| `GET` | `/ask?q=...` | NL-ops query (requires `ANTHROPIC_API_KEY`) |
+| `GET` | `/ask?q=...` | NL-ops query (requires `GEMINI_API_KEY`) |
 | `GET` | `/` | Single-page dashboard (HTML) |
 
 ---
@@ -332,7 +332,7 @@ healthcheck with 300 s timeout (for the first-run seeder), and restart policy.
 | Variable | Default | Notes |
 |---|---|---|
 | `DATABASE_URL` | `postgresql://copilot:copilot@localhost:5432/restaurant_ops` | Required |
-| `ANTHROPIC_API_KEY` | — | Optional — enables `/ask` and the LLM planner |
+| `GEMINI_API_KEY` | — | Optional — enables `/ask` and the LLM planner |
 | `MCP_MODE` | `synthetic` | `real` to use live Swiggy Instamart |
 | `SWIGGY_MCP_URL` | `https://mcp.swiggy.com/im` | Only when `MCP_MODE=real` |
 | `SWIGGY_API_KEY` | — | Builders Club key; only when `MCP_MODE=real` |
