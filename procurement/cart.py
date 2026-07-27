@@ -168,6 +168,74 @@ def draft_procurement_cart(
     }
 
 
+# ── Savings estimate ───────────────────────────────────────────────────────────
+
+
+def estimate_savings(
+    draft_cart: dict,
+    forecast: dict[int, float],
+    restaurant_id: int = 1,
+    database_url: str | None = None,
+    buffer_pct: float = 0.20,
+) -> dict:
+    """
+    Compare the actual (shortfall-based) draft cart against a naive baseline:
+    what a restaurant would spend ordering a flat 20% buffer over each dish's
+    *average historical* daily demand, exploded through the same BOM and
+    priced via the same catalog — WITHOUT netting off against current
+    inventory (a naive owner reorders the full buffered amount every time,
+    they don't do a stock-aware shortfall calculation).
+
+    Args:
+        draft_cart: output of draft_procurement_cart() — used for its total_cost
+        forecast:   {item_id: predicted_qty} for the same day, used only to
+                    decide which dishes are in scope (the baseline itself uses
+                    each dish's historical average, not this forecast value)
+
+    Returns:
+        {baseline_cost, actual_cost, savings, savings_pct, buffer_pct, message}
+    """
+    from procurement.bom import explode_to_ingredients, load_avg_daily_demand
+
+    avg_daily_demand = load_avg_daily_demand(restaurant_id, database_url)
+
+    baseline_dish_qty = {
+        item_id: avg_daily_demand.get(item_id, 0.0) * (1 + buffer_pct)
+        for item_id in forecast
+    }
+    baseline_needs = explode_to_ingredients(baseline_dish_qty, restaurant_id, database_url)
+
+    catalog = load_catalog(database_url)
+    baseline_cost = 0.0
+    for mat, qty in baseline_needs.items():
+        if mat not in catalog or qty <= 0:
+            continue
+        product = catalog[mat]
+        packs = math.ceil(qty / product["pack_size"])
+        baseline_cost += packs * product["price"]
+    baseline_cost = round(baseline_cost, 2)
+
+    actual_cost = draft_cart["total_cost"]
+    savings     = round(baseline_cost - actual_cost, 2)
+    savings_pct = round(savings / baseline_cost * 100, 1) if baseline_cost > 0 else 0.0
+
+    if savings > 0:
+        message = f"Smart procurement saved ~₹{savings:,.0f} vs. standard buffer ordering."
+    elif savings < 0:
+        message = f"Standard buffer ordering would have been ~₹{-savings:,.0f} cheaper this time."
+    else:
+        message = "Smart procurement matched standard buffer ordering on cost this time."
+
+    return {
+        "baseline_cost": baseline_cost,
+        "actual_cost":   actual_cost,
+        "savings":       savings,
+        "savings_pct":   savings_pct,
+        "buffer_pct":    buffer_pct,
+        "message":       message,
+    }
+
+
 # ── Full pipeline convenience function ─────────────────────────────────────────
 
 

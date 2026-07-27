@@ -36,6 +36,20 @@
       font-size: 12px;
       white-space: nowrap;
     }
+    .btn-header {
+      background: rgba(255,255,255,.2);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,.4);
+      border-radius: 20px;
+      padding: 7px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background .15s;
+    }
+    .btn-header:hover  { background: rgba(255,255,255,.32); }
+    .btn-header:disabled { opacity: .6; cursor: default; }
 
     /* ── Layout ───────────────────────────────────────────────────── */
     main { max-width: 1400px; margin: 0 auto; padding: 24px 24px 48px; }
@@ -78,6 +92,69 @@
     .badge { display: inline-block; border-radius: 20px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
     .badge-ok  { background: #e8f5e9; color: #2e7d32; }
     .badge-low { background: #ffebee; color: #c62828; }
+    .badge-info    { background: #e3f2fd; color: #1565c0; }
+    .badge-warning { background: #fff8e1; color: #e65100; }
+    #forecast-mode-badge { margin-left: auto; }
+
+    /* ── Demand calendar ──────────────────────────────────────────── */
+    .cal-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 6px;
+    }
+    .cal-dow {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      padding-bottom: 4px;
+    }
+    .cal-cell {
+      position: relative;
+      border-radius: 8px;
+      padding: 8px 6px;
+      min-height: 56px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      cursor: default;
+      transition: transform .1s;
+    }
+    .cal-cell:not(.cal-empty):hover { transform: scale(1.05); z-index: 2; }
+    .cal-empty { background: transparent; }
+    .cal-daynum { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 3px; }
+    .cal-qty { font-size: 11px; opacity: .9; }
+    .cal-star { font-size: 11px; color: #ffd54f; filter: drop-shadow(0 0 1px rgba(0,0,0,.4)); }
+    .cal-cell[data-tooltip]:hover::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25);
+      z-index: 10;
+      pointer-events: none;
+    }
+    .cal-cell[data-tooltip]:hover::before {
+      content: '';
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #1a1a2e;
+      margin-bottom: -4px;
+      z-index: 10;
+    }
+    .cal-legend { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 11px; color: #888; }
+    .cal-legend-bar { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #ffe0b2, #bf360c); }
 
     /* ── Buttons ──────────────────────────────────────────────────── */
     .btn {
@@ -153,6 +230,8 @@
     .result-banner.success { background: #e8f5e9; color: #1b5e20; border: 1px solid #a5d6a7; }
     .result-banner.error   { background: #ffebee; color: #b71c1c; border: 1px solid #ef9a9a; }
     .result-banner.info    { background: #e3f2fd; color: #0d47a1; border: 1px solid #90caf9; }
+    .result-banner.warning { background: #fff3e0; color: #e65100; border: 1px solid #ffcc80; }
+    .result-banner .banner-actions { margin-top: 10px; }
 
     /* ── NL-ops ───────────────────────────────────────────────────── */
     .chat-input {
@@ -223,16 +302,19 @@
     <h1>🍛 Spice Junction — Ops Copilot</h1>
     <div class="sub">AI-powered demand forecasting &amp; procurement · Indiranagar, Bengaluru</div>
   </div>
+  <button class="btn-header" id="spike-check-btn" onclick="checkForSpike()">🔎 Check for Demand Spike</button>
   <div class="header-badge" id="date-badge">Loading…</div>
 </header>
 
 <main>
 
+  <div id="spike-check-result"></div>
+
   <!-- Row 1: Forecast chart + Inventory table -->
   <div class="grid-2">
 
     <div class="card" id="forecast-card">
-      <h2><span class="icon">📈</span> Tomorrow's Demand Forecast (Top 10)</h2>
+      <h2><span class="icon">📈</span> Tomorrow's Demand Forecast (Top 10)<span class="badge badge-info" id="forecast-mode-badge" style="display:none"></span></h2>
       <div id="forecast-loading" class="empty-state"><span class="spinner"></span> Loading forecast…</div>
       <canvas id="forecast-chart" style="display:none"></canvas>
     </div>
@@ -257,6 +339,13 @@
 
   </div>
 
+  <!-- Row 1b: Demand Calendar -->
+  <div class="card" id="calendar-card" style="margin-bottom:20px">
+    <h2><span class="icon">🗓️</span> Demand Calendar (Next 30 Days)</h2>
+    <div id="calendar-loading" class="empty-state"><span class="spinner"></span> Loading calendar…</div>
+    <div id="calendar-grid" style="display:none"></div>
+  </div>
+
   <!-- Row 2: Procurement -->
   <div class="card" style="margin-bottom:20px">
     <h2><span class="icon">🛒</span> Procurement</h2>
@@ -276,6 +365,7 @@
     <div id="draft-cart-wrapper" style="display:none">
       <h3 id="cart-title"></h3>
       <div class="cart-meta" id="cart-meta"></div>
+      <div id="savings-callout" style="display:none"></div>
       <table>
         <thead>
           <tr>
@@ -340,6 +430,62 @@ function showBanner(containerId, type, html) {
   el(containerId).innerHTML = `<div class="result-banner ${type}">${html}</div>`;
 }
 
+// ── Mid-day demand spike check ────────────────────────────────────────────────
+
+async function checkForSpike() {
+  const btn = el('spike-check-btn');
+  btn.disabled = true;
+  btn.textContent = '🔎 Checking…';
+
+  try {
+    const res  = await fetch('/spike-check');
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+
+    if (data.is_spiking) {
+      const dishList = data.affected_dishes
+        .map(d => `${d.item_name} (${d.ratio}x expected)`)
+        .join(', ');
+      showBanner('spike-check-result', 'warning', `
+        🚨 <strong>${data.message}</strong>
+        ${dishList ? `<div style="margin-top:6px; font-size:13px">Affected dishes: ${dishList}</div>` : ''}
+        <div class="banner-actions">
+          <button class="btn btn-primary" onclick="runEmergencyReorderCheck()" id="emergency-reorder-btn">
+            🚨 Run Emergency Reorder Check
+          </button>
+        </div>
+      `);
+    } else {
+      showBanner('spike-check-result', 'success', `✅ ${data.message}`);
+    }
+  } catch (err) {
+    showBanner('spike-check-result', 'error', `⚠ Failed to check demand pace: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔎 Check for Demand Spike';
+  }
+}
+
+async function runEmergencyReorderCheck() {
+  const btn = el('emergency-reorder-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Running emergency reorder check…';
+  }
+  el('prepare-btn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  try {
+    await prepareDraftOrder();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '🚨 Run Emergency Reorder Check';
+    }
+  }
+}
+
 // ── Date header ──────────────────────────────────────────────────────────────
 
 (function() {
@@ -397,6 +543,76 @@ async function loadForecast() {
   }
 }
 
+// ── Forecast mode badge (own history vs category-trend fallback) ────────────
+
+async function loadForecastModeBadge() {
+  try {
+    const res   = await fetch('/forecast/calendar?days=1');
+    const data  = await res.json();
+    const badge = el('forecast-mode-badge');
+
+    badge.textContent = data.mode === 'category_trend'
+      ? `🔄 ${data.message}`
+      : `✓ ${data.message}`;
+    badge.className = 'badge ' + (data.mode === 'category_trend' ? 'badge-warning' : 'badge-info');
+    badge.style.display = 'inline-block';
+  } catch (err) {
+    // Badge is a nice-to-have — fail silently if /forecast/calendar errors
+  }
+}
+
+// ── Demand calendar ──────────────────────────────────────────────────────────
+
+function intensityColor(value, min, max) {
+  const t = max > min ? (value - min) / (max - min) : 0.5;
+  const low  = [255, 224, 178];   // #ffe0b2 — light orange
+  const high = [191,  54,  12];   // #bf360c — deep red/orange
+  const rgb  = low.map((c, i) => Math.round(c + (high[i] - c) * t));
+  return { css: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`, t };
+}
+
+async function loadDemandCalendar() {
+  try {
+    const res  = await fetch('/forecast/calendar?days=30');
+    const data = await res.json();
+    const days = data.forecast;
+
+    const qtys = days.map(d => d.total_predicted_qty);
+    const min  = Math.min(...qtys);
+    const max  = Math.max(...qtys);
+
+    const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const firstDow = new Date(days[0].date + 'T00:00:00').getDay();
+
+    let html = '<div class="cal-grid">';
+    dowNames.forEach(n => { html += `<div class="cal-dow">${n}</div>`; });
+    for (let i = 0; i < firstDow; i++) html += '<div class="cal-cell cal-empty"></div>';
+
+    days.forEach(d => {
+      const { css, t } = intensityColor(d.total_predicted_qty, min, max);
+      const textColor  = t > 0.55 ? '#fff' : '#5a3200';
+      const dayNum     = new Date(d.date + 'T00:00:00').getDate();
+      const star       = d.is_festival ? '<span class="cal-star">★</span>' : '';
+      const tooltip    = `${d.date} — ${fmt(d.total_predicted_qty)} units predicted` +
+                          (d.is_festival ? ` (${d.festival_name})` : d.is_weekend ? ' (weekend)' : '');
+
+      html += `<div class="cal-cell" style="background:${css}; color:${textColor}" data-tooltip="${tooltip}">
+                 <div class="cal-daynum">${dayNum}${star}</div>
+                 <div class="cal-qty">${Math.round(d.total_predicted_qty)} units</div>
+               </div>`;
+    });
+    html += '</div>';
+    html += `<div class="cal-legend">Low<span class="cal-legend-bar"></span>High demand · ★ festival day</div>`;
+
+    el('calendar-loading').style.display = 'none';
+    const grid = el('calendar-grid');
+    grid.innerHTML = html;
+    grid.style.display = 'block';
+  } catch (err) {
+    el('calendar-loading').innerHTML = `<span style="color:#c62828">⚠ ${err.message}</span>`;
+  }
+}
+
 // ── Inventory table ──────────────────────────────────────────────────────────
 
 async function loadInventory() {
@@ -405,14 +621,21 @@ async function loadInventory() {
     const data = await res.json();
 
     const tbody = el('inventory-body');
-    tbody.innerHTML = data.items.map(item => `
-      <tr class="${item.is_low ? 'low-stock' : ''}">
+    tbody.innerHTML = data.items.map(item => {
+      const days = item.days_until_stockout;
+      const atRisk = days !== null && days < 3;
+      const badgeText = atRisk
+        ? `⚠ Low — ${days}${days === 1 ? ' day' : ' days'} left`
+        : '✓ OK';
+      return `
+      <tr class="${atRisk ? 'low-stock' : ''}">
         <td>${item.raw_material.replace(/_/g, ' ')}</td>
         <td class="num-right">${fmt(item.current_qty)} ${item.unit}</td>
         <td class="num-right">${fmt(item.reorder_point)} ${item.unit}</td>
-        <td><span class="badge ${item.is_low ? 'badge-low' : 'badge-ok'}">${item.is_low ? '⚠ Low' : '✓ OK'}</span></td>
+        <td><span class="badge ${atRisk ? 'badge-low' : 'badge-ok'}">${badgeText}</span></td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
 
     el('inventory-loading').style.display = 'none';
     el('inventory-scroll').style.display  = 'block';
@@ -429,6 +652,7 @@ async function prepareDraftOrder() {
   btn.innerHTML = '<span class="spinner"></span> Preparing…';
   el('draft-status').textContent = '';
   el('order-result').innerHTML = '';
+  el('savings-callout').style.display = 'none';
   el('draft-cart-wrapper').style.display = 'none';
   el('approve-btn').style.display = 'none';
   el('cancel-btn').style.display  = 'none';
@@ -444,7 +668,7 @@ async function prepareDraftOrder() {
       throw new Error(err.detail || res.statusText);
     }
     const data = await res.json();
-    renderDraftCart(data.cart, data.forecast_date);
+    renderDraftCart(data.cart, data.forecast_date, data.savings);
 
     el('approve-btn').style.display  = 'inline-flex';
     el('cancel-btn').style.display   = 'inline-flex';
@@ -459,11 +683,26 @@ async function prepareDraftOrder() {
   }
 }
 
-function renderDraftCart(cart, forecastDate) {
+function renderDraftCart(cart, forecastDate, savings) {
   el('cart-title').textContent =
     `Draft Cart — ${fmtR(cart.total_cost)} for ${forecastDate}`;
   el('cart-meta').textContent =
     `${cart.total_items} products · ${cart.total_packs} packs total`;
+
+  const callout = el('savings-callout');
+  if (savings && savings.savings > 0) {
+    callout.className = 'result-banner success';
+    callout.style.display = 'block';
+    callout.innerHTML =
+      `💡 <strong>${savings.message}</strong> ` +
+      `(₹${fmt(savings.baseline_cost)} standard buffer vs ₹${fmt(savings.actual_cost)} smart cart — ${savings.savings_pct}% less)`;
+  } else if (savings) {
+    callout.className = 'result-banner info';
+    callout.style.display = 'block';
+    callout.innerHTML = `💡 ${savings.message}`;
+  } else {
+    callout.style.display = 'none';
+  }
 
   const rows = (cart.line_items || []).map(li => `
     <tr>
@@ -582,6 +821,8 @@ async function askQuestion() {
 
 window.addEventListener('DOMContentLoaded', () => {
   loadForecast();
+  loadForecastModeBadge();
+  loadDemandCalendar();
   loadInventory();
 });
 </script>

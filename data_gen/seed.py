@@ -21,9 +21,11 @@ import psycopg2.extras
 
 from data_gen.constants import (
     BILL_OF_MATERIALS,
+    INVENTORY_BUFFER_DAYS,
     MENU_ITEMS,
     RAW_MATERIAL_CATALOG,
     RESTAURANT,
+    DEFAULT_BUFFER_DAYS,
 )
 from data_gen.generate import compute_avg_daily_need, generate_orders
 
@@ -122,18 +124,21 @@ def seed_database(database_url: str | None = None) -> None:
     )
     print(f"  Inserted in {time.time()-t0:.1f}s")
 
-    # ── 8. Inventory (2× avg daily need; reorder_point = 0.5× avg) ───────────
+    # ── 8. Inventory (buffer days vary by category — see INVENTORY_BUFFER_DAYS)
     print("Computing and seeding inventory …")
-    avg_daily = compute_avg_daily_need(item_ids)
+    avg_daily = compute_avg_daily_need(item_ids)   # as of today — tracks growth model
     inventory_rows = []
     for mat_slug, daily_qty in avg_daily.items():
-        unit = RAW_MATERIAL_CATALOG[mat_slug]["unit"] if mat_slug in RAW_MATERIAL_CATALOG else "g"
+        catalog_entry = RAW_MATERIAL_CATALOG.get(mat_slug, {})
+        unit           = catalog_entry.get("unit", "g")
+        category       = catalog_entry.get("category")
+        stock_days, reorder_days = INVENTORY_BUFFER_DAYS.get(category, DEFAULT_BUFFER_DAYS)
         inventory_rows.append((
             restaurant_id,
             mat_slug,
-            round(daily_qty * 2, 2),          # current_qty  = 2 days of stock
+            round(daily_qty * stock_days, 2),
             unit,
-            round(daily_qty * 0.5, 2),         # reorder_point = 0.5 days
+            round(daily_qty * reorder_days, 2),
         ))
     psycopg2.extras.execute_values(
         cur,

@@ -6,7 +6,7 @@ Always-run (no API key needed):
   Approval     — 3 tests (explain, pending, approved)
   Injection    — 4 tests (pipeline data injection + SQL injection guard)
 
-Skipped without ANTHROPIC_API_KEY:
+Skipped without GEMINI_API_KEY:
   Planner      — 2 tests (plan structure, full loop)
   NL-ops       — 5 tests (5 sample questions)
 """
@@ -33,8 +33,8 @@ TOMORROW = date.today() + timedelta(days=1)
 # ─────────────────────────────────────────────────────────────────────────────
 
 needs_llm = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="ANTHROPIC_API_KEY not set — skipping LLM test",
+    not os.environ.get("GEMINI_API_KEY"),
+    reason="GEMINI_API_KEY not set — skipping LLM test",
 )
 
 
@@ -385,7 +385,7 @@ def test_place_order_still_raises_without_approval(pipeline_ctx):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Planner (LLM) — skipped without ANTHROPIC_API_KEY
+# Planner (LLM) — skipped without GEMINI_API_KEY
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -442,7 +442,7 @@ def test_planner_full_loop_produces_verified_cart(seeded_db):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NL-ops (LLM) — skipped without ANTHROPIC_API_KEY
+# NL-ops (LLM) — skipped without GEMINI_API_KEY
 # ─────────────────────────────────────────────────────────────────────────────
 
 

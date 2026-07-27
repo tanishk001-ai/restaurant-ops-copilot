@@ -19,7 +19,7 @@ def _get_conn(database_url: str | None = None):
     return psycopg2.connect(database_url or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL))
 
 
-def load_daily_demand(database_url: str | None = None) -> pd.DataFrame:
+def load_daily_demand(database_url: str | None = None, restaurant_id: int = 1) -> pd.DataFrame:
     """
     Return a long-format DataFrame with columns:
         date (datetime64), item_id (int), item_name (str), qty (float)
@@ -36,10 +36,10 @@ def load_daily_demand(database_url: str | None = None) -> pd.DataFrame:
             SUM(o.qty)           AS qty
         FROM   orders o
         JOIN   menu_items mi ON o.item_id = mi.id
-        WHERE  o.restaurant_id = 1
+        WHERE  o.restaurant_id = %s
         GROUP  BY DATE(o.ordered_at), o.item_id, mi.name
         ORDER  BY date, o.item_id
-    """)
+    """, (restaurant_id,))
     rows = cur.fetchall()
     conn.close()
 
@@ -49,13 +49,14 @@ def load_daily_demand(database_url: str | None = None) -> pd.DataFrame:
     return df
 
 
-def load_items(database_url: str | None = None) -> dict[int, str]:
+def load_items(database_url: str | None = None, restaurant_id: int = 1) -> dict[int, str]:
     """Return {item_id: item_name} for all active menu items."""
     conn = _get_conn(database_url)
     cur = conn.cursor()
     cur.execute(
         "SELECT id, name FROM menu_items "
-        "WHERE restaurant_id = 1 AND active = TRUE ORDER BY id"
+        "WHERE restaurant_id = %s AND active = TRUE ORDER BY id",
+        (restaurant_id,),
     )
     items = {row[0]: row[1] for row in cur.fetchall()}
     conn.close()

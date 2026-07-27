@@ -324,7 +324,46 @@ FESTIVAL_DATES: dict[date, tuple[str, float]] = {
     date(2026,  3,  2): ("Holi 2026",             1.55),
     date(2026,  3, 20): ("Eid ul-Fitr 2026",      1.50),
     date(2026,  5, 13): ("Eid ul-Adha 2026",      1.40),
+    date(2026,  8, 15): ("Independence Day 2026", 1.40),
+    date(2026,  8, 26): ("Onam 2026",             1.35),
+    date(2026,  8, 28): ("Raksha Bandhan 2026",   1.30),
+    date(2026,  9,  4): ("Janmashtami 2026",      1.35),
+    date(2026,  9, 14): ("Ganesh Chaturthi 2026", 1.35),
 }
 
 # Monthly growth rate (compound): ~18% annual → 1.4% per month
 MONTHLY_GROWTH_RATE = 0.014
+
+# Inventory buffer days by raw_material_catalog category, used to seed
+# current_qty / reorder_point. Real restaurants don't hold the same number
+# of days of stock for everything — perishables (dairy, meat, vegetables,
+# condiments) are ordered little and often; non-perishables (grains,
+# pulses, spices, oils) are bought in bulk and held much longer. A single
+# flat multiplier for every material means every row lands at the same
+# days-until-stockout number regardless of what's actually seeded — this
+# maps each category to (days of current stock, days at which to reorder)
+# so a fresh seed always produces a realistic, varied mix instead of an
+# all-or-nothing one.
+#
+# Perishable buffer days are deliberately kept BELOW ~0.72 — the ratio of
+# the slowest day of the week (Monday, WEEKLY_MULTIPLIERS=0.75) to the
+# average day compute_avg_daily_need() is scaled to. Above that ratio, a
+# perishable's buffer alone comfortably covers even the slowest day and
+# /draft-order shows a zero-shortfall cart for it on that specific date —
+# correct in isolation, but it means which dishes need reordering (and
+# sometimes whether ANY do) depends on which day of the week you happen to
+# demo on. Staying under the ratio keeps a real, non-empty draft cart for
+# perishables on every day of the week, not just above-average ones.
+INVENTORY_BUFFER_DAYS: dict[str, tuple[float, float]] = {
+    # category:      (current_stock_days, reorder_point_days)
+    "dairy":         (0.55, 0.2),
+    "meat":          (0.55, 0.2),
+    "vegetables":    (0.6, 0.25),
+    "condiments":    (0.65, 0.25),
+    "baking":        (5.0, 1.5),
+    "oils":          (7.0, 2.0),
+    "grains":        (10.0, 3.0),
+    "pulses":        (10.0, 3.0),
+    "spices":        (14.0, 4.0),
+}
+DEFAULT_BUFFER_DAYS = (2.0, 0.5)   # fallback for any uncategorized material

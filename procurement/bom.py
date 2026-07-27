@@ -91,6 +91,35 @@ def load_forecast_from_db(
     return {row[0]: row[1] for row in rows}
 
 
+def load_avg_daily_demand(
+    restaurant_id: int = 1,
+    database_url: str | None = None,
+) -> dict[int, float]:
+    """
+    Average historical daily order quantity per dish (only over days that dish
+    was actually ordered — a simple, "naive" average, not the ML forecast).
+    Returns {item_id: avg_qty_per_day}.
+    """
+    conn = _get_conn(database_url)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT item_id, AVG(daily_qty)
+        FROM (
+            SELECT item_id, DATE(ordered_at) AS d, SUM(qty) AS daily_qty
+            FROM   orders
+            WHERE  restaurant_id = %s
+            GROUP  BY item_id, DATE(ordered_at)
+        ) sub
+        GROUP BY item_id
+        """,
+        (restaurant_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return {row[0]: float(row[1]) for row in rows}
+
+
 # ── Core logic ─────────────────────────────────────────────────────────────────
 
 

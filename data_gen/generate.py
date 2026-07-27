@@ -27,9 +27,9 @@ from data_gen.constants import (
     WEEKLY_MULTIPLIERS,
 )
 
-# Data window: 17 months of history
+# Data window: 17+ months of history, always extending through today
 DATA_START = date(2025, 1, 1)
-DATA_END   = date(2026, 5, 28)   # yesterday relative to project start
+DATA_END   = date.today()
 
 
 def _festival_multiplier(d: date) -> float:
@@ -81,17 +81,32 @@ def generate_orders(
     return rows
 
 
-def compute_avg_daily_need(item_ids: dict[str, int]) -> dict[str, float]:
+def compute_avg_daily_need(
+    item_ids: dict[str, int],
+    as_of: date | None = None,
+) -> dict[str, float]:
     """
-    Compute average daily quantity of each raw material consumed,
-    based on BASE_DEMAND and BILL_OF_MATERIALS.
-    Used to seed inventory levels.
+    Compute average daily quantity of each raw material consumed, as of
+    `as_of` (default: today) — i.e. BASE_DEMAND scaled by the SAME compound
+    growth model used to generate order history, averaged across the
+    week's day-of-week multipliers rather than pinned to Jan 2025 levels
+    or a single weekday.
+
+    Without the growth/weekly averaging, this drifts further from actual
+    current demand every month (real restaurant: ~18%/year growth), which
+    silently thins out inventory buffers seeded as a multiple of it. Used
+    to seed inventory levels.
     """
     from data_gen.constants import BILL_OF_MATERIALS
 
+    as_of = as_of or date.today()
+    growth = (1.0 + MONTHLY_GROWTH_RATE) ** _month_index(as_of)
+    avg_weekly_multiplier = sum(WEEKLY_MULTIPLIERS.values()) / len(WEEKLY_MULTIPLIERS)
+    scale = growth * avg_weekly_multiplier
+
     need: dict[str, float] = {}
     for dish_slug, ingredients in BILL_OF_MATERIALS.items():
-        daily_servings = BASE_DEMAND.get(dish_slug, 0)
+        daily_servings = BASE_DEMAND.get(dish_slug, 0) * scale
         for ing in ingredients:
             mat = ing["raw_material"]
             qty = ing["qty_per_unit"] * daily_servings

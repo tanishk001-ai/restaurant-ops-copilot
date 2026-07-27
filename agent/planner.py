@@ -1,18 +1,20 @@
 """
-LLM planner — uses Claude to produce a structured JSON procurement plan.
+LLM planner — uses an LLM (via Gemini) to produce a structured JSON
+procurement plan.
 
 Flow:
-  1. plan()    — one Claude call → JSON plan (list of tool calls + rationale)
+  1. plan()    — one LLM call → JSON plan (list of tool calls + rationale)
   2. execute() — runs each plan step, chains outputs through context dict
   3. run()     — plan → execute → verify loop (max 3 iterations by default)
                  if verifier fails, feedback is passed back to plan() for revision
 
 The planner produces a PLAN (explicit JSON) first, then executes it.
-Output is always JSON from a forced tool_use call — never prose.
+Output is always JSON from a forced function call — never prose.
 
 Notes:
-  • Uses claude-3-5-haiku-20241022 by default (fast, cheap for dev/CI).
-  • ANTHROPIC_API_KEY must be set; tests skip gracefully if absent.
+  • Uses the Gemini API (google-genai SDK) with function calling forced via
+    ToolConfig(mode="ANY").
+  • GEMINI_API_KEY must be set; tests skip gracefully if absent.
   • The plan NEVER includes place_order — that lives in agent/approval.py.
 """
 
@@ -23,24 +25,25 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-import anthropic
+from google import genai
+from google.genai import types
 
 from procurement.bom import explode_to_ingredients, load_forecast_from_db
 from procurement.cart import draft_procurement_cart
 from procurement.shortfall import compute_shortfall
 
-DEFAULT_MODEL    = "claude-3-5-haiku-20241022"
+DEFAULT_MODEL    = "gemini-3.5-flash"
 DEFAULT_DATABASE = "postgresql://copilot:copilot@localhost:5432/restaurant_ops"
 
-# ── Tool definition (forces Claude to output structured JSON) ──────────────────
+# ── Tool definition (forces the model to output structured JSON) ───────────────
 
-_PLAN_TOOL: dict = {
-    "name": "create_procurement_plan",
-    "description": (
+_PLAN_FUNCTION = types.FunctionDeclaration(
+    name="create_procurement_plan",
+    description=(
         "Output a structured procurement plan as an ordered list of pipeline steps. "
         "Call this tool once with the complete plan."
     ),
-    "input_schema": {
+    parameters={
         "type": "object",
         "properties": {
             "reasoning": {
@@ -68,7 +71,8 @@ _PLAN_TOOL: dict = {
         },
         "required": ["reasoning", "steps"],
     },
-}
+)
+_PLAN_TOOL = types.Tool(function_declarations=[_PLAN_FUNCTION])
 
 _SYSTEM_PROMPT = """\
 You are a procurement planning agent for Restaurant Ops Copilot \
@@ -146,11 +150,12 @@ class Planner:
     ) -> None:
         self.model        = model
         self.database_url = database_url or os.getenv("DATABASE_URL", DEFAULT_DATABASE)
-        self._anthropic   = anthropic.Anthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY")
+        self._client      = genai.Client(
+            api_key=os.environ.get("GEMINI_API_KEY"),
+            http_options=types.HttpOptions(timeout=12_000),
         )
 
-    # ── Planning (one Claude call) ─────────────────────────────────────────────
+    # ── Planning (one LLM call) ─────────────────────────────────────────────────
 
     def plan(
         self,
@@ -160,8 +165,8 @@ class Planner:
         iteration: int = 1,
     ) -> Plan:
         """
-        Call Claude to produce a JSON procurement plan.
-        If feedback is given (from verifier), include it so Claude can revise.
+        Call the LLM to produce a JSON procurement plan.
+        If feedback is given (from verifier), include it so the model can revise.
         """
         user_content = f"Goal: {goal}\n\nContext:\n"
         for k, v in context.items():
@@ -171,22 +176,30 @@ class Planner:
             user_content += f"\nVerification feedback from previous attempt:\n{feedback}\n"
             user_content += "\nPlease revise the plan to address these constraints."
 
-        response = self._anthropic.messages.create(
-            model       = self.model,
-            max_tokens  = 1024,
-            system      = _SYSTEM_PROMPT,
-            messages    = [{"role": "user", "content": user_content}],
-            tools       = [_PLAN_TOOL],
-            tool_choice = {"type": "any"},   # forces tool_use, no prose
+        response = self._client.models.generate_content(
+            model  = self.model,
+            contents = user_content,
+            config = types.GenerateContentConfig(
+                system_instruction = _SYSTEM_PROMPT,
+                max_output_tokens  = 1024,
+                tools              = [_PLAN_TOOL],
+                tool_config        = types.ToolConfig(
+                    function_calling_config = types.FunctionCallingConfig(
+                        mode                   = "ANY",
+                        allowed_function_names = ["create_procurement_plan"],
+                    )
+                ),
+            ),
         )
 
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "create_procurement_plan":
-                return Plan.from_tool_input(block.input, iteration=iteration)
+        for call in response.function_calls or []:
+            if call.name == "create_procurement_plan":
+                raw = dict(call.args)
+                return Plan.from_tool_input(raw, iteration=iteration)
 
         raise RuntimeError(
-            "Planner: Claude did not call create_procurement_plan. "
-            f"Response: {response.content}"
+            "Planner: model did not call create_procurement_plan. "
+            f"Response: {response}"
         )
 
     # ── Execution (pure Python — no LLM) ──────────────────────────────────────

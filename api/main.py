@@ -6,10 +6,12 @@ Endpoints
 GET  /                — dashboard HTML
 GET  /health          — DB connectivity check
 GET  /forecast        — tomorrow's dish-level XGBoost predictions
+GET  /forecast/calendar — N-day lifecycle-aware forecast (own_history / category_trend)
 GET  /inventory       — current stock with is_low flag per material
 POST /draft-order     — forecast → BOM → shortfall → explained draft cart
 POST /approve-order   — human approval gate; places simulated order when approval=True
-GET  /ask             — NL-ops natural-language query (requires ANTHROPIC_API_KEY)
+GET  /ask             — NL-ops natural-language query (requires GEMINI_API_KEY)
+GET  /spike-check     — mid-day actual-vs-forecast pace check
 
 Session state
 ─────────────
@@ -21,7 +23,7 @@ demo — one concurrent session is expected in Phase 5.
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -181,12 +183,126 @@ async def get_forecast(forecast_date: Optional[str] = Query(None)) -> dict:
     }
 
 
+@app.get("/forecast/calendar")
+async def get_forecast_calendar(
+    restaurant_id: int = Query(1),
+    days: Optional[int] = Query(None, description="Horizon length; defaults to FORECAST_HORIZON_DAYS"),
+) -> dict:
+    """
+    Multi-day demand forecast, lifecycle-aware.
+
+    Uses the restaurant's own per-dish XGBoost history when it has >= 90 days
+    of order history ("own_history" mode); otherwise falls back to a
+    category-trend average across established restaurants sharing the same
+    cuisine ("category_trend" mode). `mode` and `message` are included so the
+    dashboard can badge which one produced the forecast.
+    """
+    from data_gen.constants import FESTIVAL_DATES
+    from forecasting.xgb import MATURITY_THRESHOLD_DAYS, get_restaurant_data_maturity
+
+    horizon = days or int(os.getenv("FORECAST_HORIZON_DAYS", "7"))
+    db = _db_url()
+
+    maturity = get_restaurant_data_maturity(restaurant_id, database_url=db)
+    model_version = "xgb_v1" if maturity == "established" else "category_trend_v1"
+
+    c = _conn()
+    cur = c.cursor()
+    cur.execute(
+        "SELECT MIN(ordered_at), MAX(ordered_at) FROM orders WHERE restaurant_id = %s",
+        (restaurant_id,),
+    )
+    min_ts, max_ts = cur.fetchone()
+    c.close()
+    data_days = (max_ts.date() - min_ts.date()).days + 1 if min_ts else 0
+
+    if maturity == "established":
+        message = "Based on your restaurant's history"
+    else:
+        message = f"Using category trends — {data_days} day{'s' if data_days != 1 else ''} of data collected"
+
+    start = date.today() + timedelta(days=1)
+    end   = start + timedelta(days=horizon - 1)
+
+    # Batch-check the whole range in one query, and if anything is missing,
+    # backfill it in one shot — see run_forecast_range() for why this must
+    # not be a per-day loop (25 dishes x 30 days of fresh training = ~3 min).
+    c = _conn()
+    cur = c.cursor()
+    cur.execute(
+        "SELECT COUNT(DISTINCT forecast_date) FROM forecasts WHERE restaurant_id = %s "
+        "AND model_version = %s AND forecast_date BETWEEN %s AND %s",
+        (restaurant_id, model_version, start, end),
+    )
+    covered_days = cur.fetchone()[0]
+    c.close()
+
+    if covered_days < horizon:
+        from forecasting.run import run_forecast_range
+        run_forecast_range(start, end, database_url=db, restaurant_id=restaurant_id)
+
+    calendar: list[dict] = []
+
+    for offset in range(horizon):
+        fd = start + timedelta(days=offset)
+
+        c = _conn()
+        cur = c.cursor()
+        cur.execute(
+            """
+            SELECT f.item_id, mi.name, mi.category, f.predicted_qty::float
+            FROM   forecasts f
+            JOIN   menu_items mi ON f.item_id = mi.id
+            WHERE  f.restaurant_id = %s AND f.forecast_date = %s AND f.model_version = %s
+            ORDER  BY f.predicted_qty DESC
+            """,
+            (restaurant_id, fd, model_version),
+        )
+        rows = cur.fetchall()
+        c.close()
+
+        festival = FESTIVAL_DATES.get(fd)
+        predictions = [
+            {"item_id": r[0], "item_name": r[1], "category": r[2], "predicted_qty": round(r[3], 2)}
+            for r in rows
+        ]
+
+        calendar.append({
+            "date":                str(fd),
+            "total_predicted_qty": round(sum(p["predicted_qty"] for p in predictions), 2),
+            "is_weekend":          fd.weekday() >= 5,
+            "is_festival":         festival is not None,
+            "festival_name":       festival[0] if festival else None,
+            "predictions":         predictions,
+        })
+
+    return {
+        "restaurant_id": restaurant_id,
+        "start_date":    str(start),
+        "days":          horizon,
+        "mode":          "own_history" if maturity == "established" else "category_trend",
+        "data_days":     data_days,
+        "maturity_threshold_days": MATURITY_THRESHOLD_DAYS,
+        "message":       message,
+        "forecast":      calendar,
+    }
+
+
 @app.get("/inventory")
 async def get_inventory() -> dict:
     """
     Return current stock for all 21 raw materials.
     is_low = True when current_qty ≤ reorder_point.
+    days_until_stockout = current_qty ÷ (avg daily consumption, derived from
+    order history × BOM) — None when there's no consumption history for a
+    material (e.g. never used in any ordered dish).
     """
+    from procurement.bom import explode_to_ingredients, load_avg_daily_demand
+
+    db = _db_url()
+    avg_daily_dish_qty = load_avg_daily_demand(restaurant_id=1, database_url=db)
+    avg_daily_consumption = explode_to_ingredients(avg_daily_dish_qty, restaurant_id=1, database_url=db)
+
     c = _conn()
     cur = c.cursor()
     cur.execute(
@@ -205,19 +321,22 @@ async def get_inventory() -> dict:
     rows = cur.fetchall()
     c.close()
 
-    return {
-        "items": [
-            {
-                "raw_material":  r[0],
-                "current_qty":   round(r[1], 2),
-                "unit":          r[2],
-                "reorder_point": round(r[3], 2),
-                "product_name":  r[4],
-                "is_low":        r[1] <= r[3],
-            }
-            for r in rows
-        ],
-    }
+    items = []
+    for r in rows:
+        raw_material, current_qty, unit, reorder_point, product_name = r
+        rate = avg_daily_consumption.get(raw_material, 0.0)
+        days_until_stockout = round(current_qty / rate, 1) if rate > 0 else None
+        items.append({
+            "raw_material":         raw_material,
+            "current_qty":          round(current_qty, 2),
+            "unit":                 unit,
+            "reorder_point":        round(reorder_point, 2),
+            "product_name":         product_name,
+            "is_low":               current_qty <= reorder_point,
+            "days_until_stockout":  days_until_stockout,
+        })
+
+    return {"items": items}
 
 
 @app.post("/draft-order")
@@ -250,7 +369,7 @@ async def draft_order(req: DraftOrderRequest = Body(default_factory=DraftOrderRe
     try:
         from agent.approval import explain_cart
         from mcp_client.client import get_client
-        from procurement.cart import run_procurement_pipeline
+        from procurement.cart import estimate_savings, run_procurement_pipeline
 
         client = get_client(database_url=db)
         result = run_procurement_pipeline(
@@ -259,6 +378,7 @@ async def draft_order(req: DraftOrderRequest = Body(default_factory=DraftOrderRe
         explained = explain_cart(
             result["cart"], result["shortfalls"], result["needs"], fd
         )
+        savings = estimate_savings(result["cart"], result["forecast"], database_url=db)
 
         _state.client          = client
         _state.pipeline_result = result
@@ -269,6 +389,7 @@ async def draft_order(req: DraftOrderRequest = Body(default_factory=DraftOrderRe
             "status":        "ok",
             "forecast_date": str(fd),
             "cart":          cart,
+            "savings":       savings,
             "message": (
                 f"Draft ready: {cart['total_items']} products, "
                 f"{cart['total_packs']} packs, ₹{cart['total_cost']:,.2f}"
@@ -304,20 +425,126 @@ async def approve_order(req: ApproveOrderRequest) -> dict:
     return result
 
 
+@app.get("/spike-check")
+async def spike_check(restaurant_id: int = Query(1)) -> dict:
+    """
+    Compare today's actual order pace so far against the pace implied by
+    today's forecast (predicted_qty × fraction of the day elapsed).
+
+    ratio = total actual so far / total expected so far, aggregated across
+    dishes. is_spiking = ratio >= SPIKE_THRESHOLD (1.3x).  affected_dishes
+    lists individual dishes whose own ratio also clears the threshold (with
+    a floor on expected_qty so a sliver of forecast right after midnight
+    can't produce a noisy, meaningless ratio).
+    """
+    SPIKE_THRESHOLD = 1.3
+    MIN_EXPECTED    = 1.0   # units — floor to avoid noise early in the day
+
+    db = _db_url()
+
+    c = _conn()
+    cur = c.cursor()
+    cur.execute("SELECT CURRENT_DATE, NOW()")
+    today, now = cur.fetchone()
+    c.close()
+    fraction_elapsed = max(
+        (now.hour * 60 + now.minute + now.second / 60) / 1440, 0.001
+    )
+
+    c = _conn()
+    cur = c.cursor()
+    cur.execute(
+        "SELECT COUNT(*) FROM forecasts WHERE restaurant_id = %s "
+        "AND forecast_date = %s AND model_version = 'xgb_v1'",
+        (restaurant_id, today),
+    )
+    missing = cur.fetchone()[0] == 0
+    c.close()
+
+    if missing:
+        from forecasting.run import run_forecast
+        run_forecast(today, models=["xgb"], database_url=db, restaurant_id=restaurant_id)
+
+    c = _conn()
+    cur = c.cursor()
+    cur.execute(
+        """
+        SELECT f.item_id, mi.name, f.predicted_qty::float
+        FROM   forecasts f
+        JOIN   menu_items mi ON f.item_id = mi.id
+        WHERE  f.restaurant_id = %s AND f.forecast_date = %s AND f.model_version = 'xgb_v1'
+        """,
+        (restaurant_id, today),
+    )
+    forecast_rows = cur.fetchall()
+
+    cur.execute(
+        "SELECT item_id, SUM(qty)::float FROM orders "
+        "WHERE restaurant_id = %s AND ordered_at >= CURRENT_DATE AND ordered_at <= NOW() "
+        "GROUP BY item_id",
+        (restaurant_id,),
+    )
+    actual_by_item = {r[0]: r[1] for r in cur.fetchall()}
+    c.close()
+
+    total_actual   = 0.0
+    total_expected = 0.0
+    affected: list[dict] = []
+
+    for item_id, item_name, predicted_qty in forecast_rows:
+        expected_so_far = max(predicted_qty * fraction_elapsed, 0.0)
+        actual_so_far   = actual_by_item.get(item_id, 0.0)
+
+        total_actual   += actual_so_far
+        total_expected += expected_so_far
+
+        if expected_so_far >= MIN_EXPECTED:
+            dish_ratio = actual_so_far / expected_so_far
+            if dish_ratio >= SPIKE_THRESHOLD:
+                affected.append({
+                    "item_name": item_name,
+                    "actual":    round(actual_so_far, 1),
+                    "expected":  round(expected_so_far, 1),
+                    "ratio":     round(dish_ratio, 2),
+                })
+
+    affected.sort(key=lambda d: d["ratio"], reverse=True)
+
+    ratio      = round(total_actual / total_expected, 2) if total_expected > 0 else 0.0
+    is_spiking = ratio >= SPIKE_THRESHOLD
+
+    if is_spiking:
+        top = ", ".join(d["item_name"] for d in affected[:3])
+        message = (
+            f"Demand is running {ratio}x above forecast pace today"
+            + (f" — driven by {top}" if top else "") + "."
+        )
+    else:
+        message = f"Demand tracking normal — {ratio}x expected forecast pace."
+
+    return {
+        "is_spiking":              is_spiking,
+        "ratio":                   ratio,
+        "fraction_of_day_elapsed": round(fraction_elapsed, 3),
+        "affected_dishes":         affected[:5],
+        "message":                 message,
+    }
+
+
 @app.get("/ask")
 async def ask_question(q: str = Query(..., description="Natural-language ops question")) -> dict:
     """
     Answer a natural-language question about restaurant operations.
-    Requires ANTHROPIC_API_KEY — returns a friendly message if not configured.
+    Requires GEMINI_API_KEY — returns a friendly message if not configured.
     """
     if not q.strip():
         raise HTTPException(status_code=400, detail="q cannot be empty")
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not os.environ.get("GEMINI_API_KEY"):
         return {
             "question": q,
             "answer":   (
-                "NL-ops requires ANTHROPIC_API_KEY. "
+                "NL-ops requires GEMINI_API_KEY. "
                 "Add it to your .env file and restart the server."
             ),
             "sql":      "",
@@ -328,4 +555,39 @@ async def ask_question(q: str = Query(..., description="Natural-language ops que
         from agent.nl_ops import ask
         return ask(q, database_url=_db_url())
     except Exception as exc:
+        from google.genai.errors import APIError
+
+        # Most common questions (revenue, stock levels, top dishes, forecast)
+        # are answered by agent.nl_ops's fast path and never reach here at
+        # all — this only runs for novel questions that fall through to the
+        # LLM. Degrade gracefully for the two failure modes that are the
+        # LLM call's own fault, not the user's; anything else is a real bug.
+        if isinstance(exc, APIError) and exc.code == 429:
+            return {
+                "question": q,
+                "answer": (
+                    "The AI service's free-tier quota is exhausted for today. "
+                    "Try one of the suggested questions above — those are "
+                    "answered directly without the AI service and always work."
+                ),
+                "sql":      "",
+                "raw_rows": [],
+            }
+
+        # Walk the cause chain — network blips (DNS failures, connection
+        # resets, timeouts) surface as an OSError somewhere underneath the
+        # SDK's own exception type.
+        root = exc
+        while root.__cause__ is not None:
+            root = root.__cause__
+        if isinstance(root, OSError):
+            return {
+                "question": q,
+                "answer": (
+                    "Couldn't reach the AI service just now (temporary network issue). "
+                    "Please try again in a moment."
+                ),
+                "sql":      "",
+                "raw_rows": [],
+            }
         raise HTTPException(status_code=500, detail=str(exc))

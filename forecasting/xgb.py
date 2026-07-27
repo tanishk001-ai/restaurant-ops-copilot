@@ -11,14 +11,23 @@ Features used:
 
 All lag/rolling features are computed with a shift so they never include the
 target day itself (no look-ahead leakage at training time).
+
+Restaurant lifecycle:
+  New restaurants (< 90 days of order history) don't have enough data for
+  per-dish lag/rolling features to mean anything. get_restaurant_data_maturity()
+  detects this, and predict_category_trend() provides a simpler fallback —
+  a day-of-week + festival multiplier averaged across established restaurants
+  in the same cuisine category — until the restaurant crosses the threshold.
 """
 
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+import psycopg2
 from xgboost import XGBRegressor
 
 from data_gen.constants import FESTIVAL_DATES
@@ -37,6 +46,13 @@ FEATURE_COLS: list[str] = [
 ]
 
 _FESTIVAL_SET: set[date] = set(FESTIVAL_DATES.keys())
+
+DEFAULT_DATABASE_URL = "postgresql://copilot:copilot@localhost:5432/restaurant_ops"
+MATURITY_THRESHOLD_DAYS = 90
+
+
+def _get_conn(database_url: str | None = None):
+    return psycopg2.connect(database_url or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL))
 
 
 # ─── Feature engineering ───────────────────────────────────────────────────────
@@ -157,3 +173,130 @@ def predict_xgb_range(
 
     preds = np.maximum(0, model.predict(test_df[FEATURE_COLS]))
     return pd.Series(preds.astype(float), index=test_df.index)
+
+
+# ─── Restaurant lifecycle / category-trend fallback ────────────────────────────
+
+
+def get_restaurant_data_maturity(
+    restaurant_id: int,
+    database_url: str | None = None,
+    threshold_days: int = MATURITY_THRESHOLD_DAYS,
+) -> str:
+    """
+    Return 'new' if restaurant_id has fewer than threshold_days of order
+    history, else 'established'. Used to decide whether a restaurant has
+    enough of its own history for per-dish XGBoost lag features to be
+    meaningful, or whether it should fall back to the category-trend model.
+    """
+    conn = _get_conn(database_url)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT MIN(ordered_at), MAX(ordered_at) FROM orders WHERE restaurant_id = %s",
+        (restaurant_id,),
+    )
+    min_ts, max_ts = cur.fetchone()
+    conn.close()
+
+    if min_ts is None:
+        return "new"
+
+    history_days = (max_ts.date() - min_ts.date()).days + 1
+    return "established" if history_days >= threshold_days else "new"
+
+
+def predict_category_trend(
+    restaurant_id: int,
+    target_date: date,
+    database_url: str | None = None,
+    threshold_days: int = MATURITY_THRESHOLD_DAYS,
+) -> dict[int, float]:
+    """
+    Fallback forecast for restaurants without enough history of their own.
+
+    Averages a day-of-week demand curve (qty per active menu item per day)
+    across "established" restaurants sharing the same cuisine, applies the
+    same festival multiplier used elsewhere, and scales the result by this
+    restaurant's own menu — i.e. every one of its active items gets the same
+    per-item prediction for target_date.
+    """
+    conn = _get_conn(database_url)
+    cur = conn.cursor()
+
+    cur.execute("SELECT cuisine FROM restaurants WHERE id = %s", (restaurant_id,))
+    row = cur.fetchone()
+    if row is None:
+        conn.close()
+        raise ValueError(f"Unknown restaurant_id={restaurant_id}")
+    cuisine = row[0]
+
+    cur.execute(
+        "SELECT id FROM restaurants WHERE cuisine = %s AND id != %s",
+        (cuisine, restaurant_id),
+    )
+    peer_ids = [r[0] for r in cur.fetchall()]
+    established_peers = [
+        rid for rid in peer_ids
+        if get_restaurant_data_maturity(rid, database_url, threshold_days) == "established"
+    ]
+
+    cur.execute(
+        "SELECT COUNT(*) FROM menu_items WHERE restaurant_id = %s AND active = TRUE",
+        (restaurant_id,),
+    )
+    target_item_count = cur.fetchone()[0]
+
+    # day-of-week bucket sums: per-peer average qty-per-item-per-day, then
+    # averaged again across peers so no single restaurant dominates
+    dow_sums   = np.zeros(7)
+    dow_counts = np.zeros(7)
+
+    for rid in established_peers:
+        cur.execute(
+            "SELECT COUNT(*) FROM menu_items WHERE restaurant_id = %s AND active = TRUE",
+            (rid,),
+        )
+        peer_item_count = cur.fetchone()[0] or 1
+
+        cur.execute(
+            """
+            SELECT DATE(ordered_at) AS day, SUM(qty) AS total_qty
+            FROM   orders
+            WHERE  restaurant_id = %s
+            GROUP  BY DATE(ordered_at)
+            """,
+            (rid,),
+        )
+        for day, total_qty in cur.fetchall():
+            dow = pd.Timestamp(day).dayofweek
+            dow_sums[dow]   += float(total_qty) / peer_item_count
+            dow_counts[dow] += 1
+
+    conn.close()
+
+    if not established_peers or target_item_count == 0 or dow_counts.sum() == 0:
+        # No peers to learn from — flat, conservative default
+        return {}
+
+    dow_avg = np.divide(dow_sums, np.maximum(dow_counts, 1))
+    overall_avg = dow_avg.mean() or 1.0
+    dow_multiplier = dow_avg / overall_avg
+
+    target_dow = pd.Timestamp(target_date).dayofweek
+    festival_multiplier = (
+        FESTIVAL_DATES[target_date][1] if target_date in _FESTIVAL_SET else 1.0
+    )
+    predicted_per_item = max(
+        0.0, overall_avg * dow_multiplier[target_dow] * festival_multiplier
+    )
+
+    conn = _get_conn(database_url)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM menu_items WHERE restaurant_id = %s AND active = TRUE",
+        (restaurant_id,),
+    )
+    item_ids = [r[0] for r in cur.fetchall()]
+    conn.close()
+
+    return {item_id: predicted_per_item for item_id in item_ids}
