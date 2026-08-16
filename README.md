@@ -9,6 +9,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-94%20passing-brightgreen.svg)](#testing)
 [![Docker](https://img.shields.io/badge/docker--compose-ready-blue.svg)](#docker-compose-one-command-start)
+[![Swiggy Builders Club](https://img.shields.io/badge/Swiggy-Builders%20Club%20Selected-fc8019.svg)](#why-a-synthetic-mcp-server)
+
+---
+
+> 🎉 **Selected for Swiggy Builders Club (August 2026)** — Restaurant Ops
+> Copilot's application to Swiggy's invite-only partner programme for live
+> Instamart procurement access was approved. This is the project's first
+> external validation: a real platform, not just a synthetic sandbox, is
+> opening its API to it. Integration agreement in progress — see
+> [Why a synthetic MCP server?](#why-a-synthetic-mcp-server) for what changes
+> once live credentials land.
 
 ---
 
@@ -98,6 +109,10 @@ no spreadsheets, no phone calls to suppliers.
 Swiggy's live Instamart MCP endpoint (`https://mcp.swiggy.com/im`) is gated
 behind the **Swiggy Builders Club** partner programme, which requires a security
 review before API access is granted.
+
+Update: this project has now been selected for the programme (see banner
+above) — live credentials are pending, so the synthetic layer below stays
+the default until `SWIGGY_API_KEY` is issued.
 
 Rather than block development, this project ships a **synthetic MCP server**
 (`synthetic_mcp/server.py`) that mirrors the exact tool surface of the real one:
@@ -415,7 +430,7 @@ restaurant-ops-copilot/
 
 | Priority | Item |
 |---|---|
-| 🔑 **Next** | **Real Swiggy Instamart MCP** — Builders Club access grants live procurement; set `MCP_MODE=real` + `SWIGGY_API_KEY`. Zero code changes needed. |
+| 🔑 **Next** | **Real Swiggy Instamart MCP** — ✅ Selected for Swiggy Builders Club; live procurement unlocks once `SWIGGY_API_KEY` is issued. Set `MCP_MODE=real` + `SWIGGY_API_KEY`. Zero code changes needed. |
 | 🏗️ | **Multi-restaurant** — `restaurant_id` is already threaded through schema and most functions; API needs a tenant header. |
 | 📈 | **Demand segmentation** — separate XGBoost models per category (biryani, beverages, breads) for tighter MAPE. |
 | 🔍 | **pgvector semantic search** — `menu_embeds` table is provisioned; use cosine similarity for fuzzy ingredient matching in NL-ops. |
